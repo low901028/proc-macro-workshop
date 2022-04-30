@@ -50,7 +50,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
     ///                             Colon,
     ///                         ),
     ///                         ty: Path(           # 该field类型
-    ///                             TypePath {
+    ///                             TypePath {      # 类型路径: 类似A::B::C
     ///                                 qself: None,
     ///                                 path: Path {
     ///                                     leading_colon: None,
@@ -74,6 +74,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
     ///         semi_token: None,
     ///     },
     /// )
+
+    // 获取当前struct中所有fields: DataStruct::fields::FieldsNamed部分
     let data: FieldsNamed = match input.data {
         Data::Struct(DataStruct {
             fields: Fields::Named(n),
@@ -82,6 +84,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         other => unimplemented!("{:?}", other),
     };
 
+    // 遍历每个命名的field：名称、类型; 构建(名称, 类型Option<真实类型>)
     let fields = data.named.iter().filter_map(|field| {
         let ty = &field.ty;
         match &field.ident {
@@ -90,23 +93,33 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
+    // 遍历每个field：名称、类型; 构建(名称, Option<真实类型>)
     let names = data.named.iter().filter_map(|field| match &field.ident {
         None => None,
         Some(ident) => Some((ident, inner_for_option(&field.ty))),
     });
 
+    // 构建每个字段的初始化值:None; 类似 字段name: None
     let initialize = names.clone().map(|(name, _)| quote! { #name: None });
 
+    //
     let extract = names.clone().map(|(name, option)| match option {
         None => quote! { #name: self.#name.clone()? },
         Some(_) => quote! { #name: self.#name.clone() },
     });
 
+    // 构建所有字段的模版： 类似 字段name： 类型Option<#ty>
     let quoted_fields = fields.clone().map(|(name, ty, option)| match option {
         None => quote! { #name: Option<#ty> },
         Some(ty) => quote! { #name: Option<#ty> },
     });
 
+    // 构建每个字段对应的setter方法
+    // 格式类似：
+    // pub fn 字段名称(&mut self, 值value: 类型#ty) {
+    //  self.#name = Some(value);
+    //  self
+    // }
     let methods = fields.clone().map(|(name, ty, option)| match option {
         None => quote! {
             pub fn #name(&mut self, value: #ty) -> &mut Self {
@@ -123,7 +136,9 @@ pub fn derive(input: TokenStream) -> TokenStream {
         },
     });
 
+    // 构建最终的Builder模式的对应的模版
     let expanded = quote! {
+        // 生成Builder，并初始化struct不同字段的内容
         impl #name {
             fn builder() -> #builder {
                 #builder {
@@ -134,12 +149,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
             }
         }
 
+        // 定义Builder
         struct #builder {
             #(
                 #quoted_fields,
             )*
         }
 
+        // 实现Builder的build及不同字段赋值的方法
         impl #builder {
             pub fn build(&self) -> Option<#name> {
                 Some(#name {
@@ -155,6 +172,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     };
     eprintln!("===expanded: {:#?}", expanded);
+
+    // 最终输出proc_macro::TokenStream,并入被编译器rustc输出AST
     TokenStream::from(expanded)
 }
 
